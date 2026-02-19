@@ -2,15 +2,10 @@
 - [Solo Enterprise for AgentGateway - Security Architecture Diagrams](#solo-enterprise-for-agentgateway---security-architecture-diagrams)
   - [1. Security Options Overview](#1-security-options-overview)
   - [2. CORS - Cross-Origin Resource Sharing](#2-cors---cross-origin-resource-sharing)
-    - [Key Configuration (EnterpriseAgentgatewayPolicy)](#key-configuration-enterpriseagentgatewaypolicy)
   - [3. CSRF - Cross-Site Request Forgery Protection](#3-csrf---cross-site-request-forgery-protection)
-    - [Key Configuration](#key-configuration)
   - [4. Basic Authentication (Native)](#4-basic-authentication-native)
-    - [Key Configuration](#key-configuration-1)
   - [5. API Key Authentication (Native)](#5-api-key-authentication-native)
-    - [Key Configuration](#key-configuration-2)
   - [6. External Auth - BYO (Bring Your Own) External Auth Service](#6-external-auth---byo-bring-your-own-external-auth-service)
-    - [Key Configuration](#key-configuration-3)
   - [7. OAuth - Authorization Code Flow (OIDC)](#7-oauth---authorization-code-flow-oidc)
   - [8. OAuth - Access Token Validation](#8-oauth---access-token-validation)
   - [9. JWT Authentication (Native - No ExtAuth)](#9-jwt-authentication-native---no-extauth)
@@ -120,23 +115,6 @@ sequenceDiagram
     end
 ```
 
-### Key Configuration (EnterpriseAgentgatewayPolicy)
-
-```yaml
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: agentgateway-proxy
-  traffic:
-    cors:
-      allowOrigins: ["https://app.example.com"]
-      allowMethods: ["GET", "POST", "OPTIONS"]
-      allowHeaders: ["Authorization", "Content-Type"]
-      allowCredentials: true
-      maxAge: 86400
-```
-
 ---
 
 ## 3. CSRF - Cross-Site Request Forgery Protection
@@ -170,17 +148,6 @@ sequenceDiagram
     AGW->>Backend: Forward request
     Backend-->>AGW: 200 OK
     AGW-->>User: 200 OK
-```
-
-### Key Configuration
-
-```yaml
-spec:
-  traffic:
-    csrf:
-      additionalOrigins:
-        - example.org
-        - allowThisOne.example.com
 ```
 
 ---
@@ -224,22 +191,6 @@ sequenceDiagram
     end
 ```
 
-### Key Configuration
-
-```yaml
-# Users defined inline — no AuthConfig or Ext Auth Service needed
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: agentgateway-proxy
-  traffic:
-    basicAuthentication:
-      mode: Strict                # or Optional
-      users:
-        - "user:$apr1$TYiryv0/$8BvzLUO9IfGPGGsPnAgSu1"
-```
-
 ---
 
 ## 5. API Key Authentication (Native)
@@ -261,12 +212,12 @@ sequenceDiagram
 
     Note over C,Backend: Retry with API key
 
-    C->>AGW: POST /api<br/>Authorization: Bearer N2YwMDIx...
+    C->>AGW: POST /api<br/>x-api-key: N2YwMDIx...
 
     AGW->>K8s: Lookup referenced secret<br/>(by name or label selector)
     K8s-->>AGW: Secret found
 
-    AGW->>AGW: Compare API key from<br/>Authorization header vs secret
+    AGW->>AGW: Compare API key from<br/>request header vs secret
 
     alt mode: Strict — Key valid
         AGW->>Backend: Forward request
@@ -281,38 +232,6 @@ sequenceDiagram
     rect rgb(245, 245, 255)
         Note over AGW: mode: Optional<br/>• Valid API key → forward<br/>• Invalid API key → 401 reject<br/>• No API key → allow through
     end
-```
-
-### Key Configuration
-
-```yaml
-# API key secret — referenced directly from the policy
-apiVersion: v1
-kind: Secret
-type: extauth.solo.io/apikey
-metadata:
-  name: apikey
-  labels:
-    app: httpbin
-stringData:
-  api-key: N2YwMDIxZTEt...
-
----
-# Policy — no AuthConfig or Ext Auth Service needed
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: agentgateway-proxy
-  traffic:
-    apiKeyAuthentication:
-      mode: Strict                # or Optional
-      secretRef:
-        name: apikey              # Direct secret reference
-      # OR use label selector:
-      # secretSelector:
-      #   matchLabels:
-      #     app: httpbin
 ```
 
 ---
@@ -343,23 +262,6 @@ sequenceDiagram
         BYO-->>AGW: DENY<br/>(status code, message)
         AGW-->>C: 403 Forbidden<br/>"denied by ext_authz"
     end
-```
-
-### Key Configuration
-
-```yaml
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway              # or HTTPRoute for route-level
-      name: agentgateway-proxy
-  traffic:
-    extAuth:
-      backendRef:
-        name: ext-authz          # Your auth service
-        namespace: agentgateway-system
-        port: 4444
-      grpc: {}                   # gRPC protocol
 ```
 
 ---
