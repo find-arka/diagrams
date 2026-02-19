@@ -653,14 +653,14 @@ sequenceDiagram
 
 ## Quick Reference: Which Security Option to Use
 
-| Scenario | Recommended Option | Policy Resource |
-|---|---|---|
-| Browser-based web apps calling APIs | **CORS** + **CSRF** | EnterpriseAgentgatewayPolicy |
-| Simple service-to-service auth | **API Key** (native) | EnterpriseAgentgatewayPolicy + K8s Secret |
-| Human users logging in (interactive) | **OAuth Authorization Code** | AuthConfig + EnterpriseAgentgatewayPolicy |
-| Programmatic API access with IdP | **OAuth Access Token** or **JWT** | AuthConfig or EnterpriseAgentgatewayPolicy |
-| High-performance token validation | **JWT (Native)** | EnterpriseAgentgatewayPolicy |
-| Agent acting on behalf of user | **OBO Token Exchange** | Helm values (STS) + JWT Policy |
-| Agent needs upstream API credentials | **Elicitations** | Helm values (STS) + Solo UI |
-| Custom auth logic / legacy systems | **BYO Ext Auth** | EnterpriseAgentgatewayPolicy |
-| Internal testing / simple scenarios | **Basic Auth** (native) | EnterpriseAgentgatewayPolicy |
+| Scenario | Recommended Option |
+|---|---|
+| Browser-based web apps calling APIs | **CORS** + **CSRF** |
+| Simple service-to-service auth | **API Key** (native) |
+| Human users logging in (interactive) | **OAuth Authorization Code** |
+| Programmatic API access with IdP | **OAuth Access Token** or **JWT** |
+| High-performance token validation | **JWT (Native)** |
+| Agent acting on behalf of user | **OBO Token Exchange** |
+| Agent needs upstream API credentials | **Elicitations** |
+| Custom auth logic / legacy systems | **BYO Ext Auth** |
+| Internal testing / simple scenarios | **Basic Auth** (native) |
