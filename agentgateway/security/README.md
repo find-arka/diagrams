@@ -5,12 +5,12 @@
     - [Key Configuration (EnterpriseAgentgatewayPolicy)](#key-configuration-enterpriseagentgatewaypolicy)
   - [3. CSRF - Cross-Site Request Forgery Protection](#3-csrf---cross-site-request-forgery-protection)
     - [Key Configuration](#key-configuration)
-  - [4. External Auth - Basic Authentication](#4-external-auth---basic-authentication)
-    - [Key Resources](#key-resources)
-  - [5. External Auth - API Key Authentication](#5-external-auth---api-key-authentication)
+  - [4. Basic Authentication (Native)](#4-basic-authentication-native)
     - [Key Configuration](#key-configuration-1)
-  - [6. External Auth - BYO (Bring Your Own) External Auth Service](#6-external-auth---byo-bring-your-own-external-auth-service)
+  - [5. API Key Authentication (Native)](#5-api-key-authentication-native)
     - [Key Configuration](#key-configuration-2)
+  - [6. External Auth - BYO (Bring Your Own) External Auth Service](#6-external-auth---byo-bring-your-own-external-auth-service)
+    - [Key Configuration](#key-configuration-3)
   - [7. OAuth - Authorization Code Flow (OIDC)](#7-oauth---authorization-code-flow-oidc)
   - [8. OAuth - Access Token Validation](#8-oauth---access-token-validation)
   - [9. JWT Authentication (Native - No ExtAuth)](#9-jwt-authentication-native---no-extauth)
@@ -43,11 +43,13 @@ graph TB
             CSRF["CSRF Protection"]
         end
 
-        subgraph AuthN["Authentication"]
-            JWT_Auth["JWT Authentication<br/>(Native)"]
-            ExtAuth["External Auth Service"]
+        subgraph NativeAuthN["Native Authentication (Built-in)"]
+            JWT_Auth["JWT Authentication"]
             BasicAuth["Basic Auth"]
             APIKey["API Key Auth"]
+        end
+
+        subgraph ExtAuthN["External Auth Service"]
             OAuth_AC["OAuth Authorization Code"]
             OAuth_AT["OAuth Access Token<br/>Validation"]
             BYO["BYO Ext Auth Service"]
@@ -67,7 +69,8 @@ graph TB
     subgraph Backends["Backend Services"]
         LLM["LLM Providers<br/>(OpenAI, Anthropic, etc.)"]
         MCP_Server["MCP Tool Servers"]
-        AgentBackend["Agent / App Backends"]
+        AgentBackend["AI Agents"]
+        HTTPWorkload["HTTP Workloads<br/>(Non-agentic)"]
     end
 
     Browser --> CORS & CSRF
@@ -75,8 +78,8 @@ graph TB
     Agent --> GW
     MCP_Client --> GW
 
-    GW --> JWT_Auth & ExtAuth
-    ExtAuth --> BasicAuth & APIKey & OAuth_AC & OAuth_AT & BYO
+    GW --> JWT_Auth & BasicAuth & APIKey
+    GW --> OAuth_AC & OAuth_AT & BYO
     GW --> OBO & Elicit
 
     JWT_Auth -.->|JWKS| Keycloak
@@ -85,7 +88,7 @@ graph TB
     OBO -.->|Subject Token Validation| Keycloak
     Elicit -.->|OAuth Flow| ExtOAuth
 
-    GW --> LLM & MCP_Server & AgentBackend
+    GW --> LLM & MCP_Server & AgentBackend & HTTPWorkload
 ```
 
 ---
@@ -182,107 +185,134 @@ spec:
 
 ---
 
-## 4. External Auth - Basic Authentication
+## 4. Basic Authentication (Native)
 
-Basic auth sends base64-encoded `username:password` credentials in the `Authorization` header. The gateway validates against a dictionary of APR1-hashed passwords stored in an **AuthConfig**.
-
-```mermaid
-sequenceDiagram
-    participant C as Client / Agent
-    participant AGW as AgentGateway Proxy
-    participant EA as Ext Auth Service
-    participant AC as AuthConfig<br/>(User/Password Store)
-    participant LLM as LLM Provider
-
-    C->>AGW: POST /openai<br/>(no credentials)
-    AGW->>EA: Check auth
-    EA->>AC: Lookup credentials
-    AC-->>EA: No match
-    EA-->>AGW: 401 Unauthorized
-    AGW-->>C: 401 Unauthorized<br/>"API key is missing or invalid"
-
-    Note over C,LLM: Retry with credentials
-
-    C->>AGW: POST /openai<br/>Authorization: Basic dXNlcjpwYXNzd29yZA==
-    AGW->>EA: Check auth
-    EA->>EA: Decode base64 → user:password
-    EA->>AC: Lookup user, verify APR1 hash<br/>(salt + hashed password)
-    AC-->>EA: Match found
-    EA-->>AGW: Authenticated ✓
-    AGW->>LLM: Forward request<br/>(AGW injects LLM API key)
-    LLM-->>AGW: LLM Response
-    AGW-->>C: 200 OK + Response
-```
-
-### Key Resources
-
-```
-┌─────────────────────┐     ┌──────────────────────────────┐
-│  AuthConfig         │     │  EnterpriseAgentgatewayPolicy│
-│  (extauth.solo.io)  │◄────│  (traffic.entExtAuth)        │
-│                     │     │                              │
-│  basicAuth:         │     │  targetRefs: Gateway         │
-│    apr:             │     │  authConfigRef: basic-auth   │
-│      users:         │     │  backendRef: ext-auth-svc    │
-│        user:        │     │                              │
-│          salt: ...  │     └──────────────────────────────┘
-│          hashedPw..│
-└─────────────────────┘
-```
-
----
-
-## 5. External Auth - API Key Authentication
-
-API keys are long-lived UUIDs stored as Kubernetes Secrets. AgentGateway matches the API key from a configurable request header against the stored secrets.
+Basic auth is built into the AgentGateway proxy. It sends base64-encoded `username:password` credentials in the `Authorization` header. The proxy validates against APR1-hashed passwords configured directly in the policy. **No external auth service is required.**
 
 ```mermaid
 sequenceDiagram
     participant C as Client / Agent
     participant AGW as AgentGateway Proxy
-    participant EA as Ext Auth Service
-    participant K8s as K8s Secrets<br/>(API Keys)
-    participant LLM as LLM Provider
+    participant Backend as Backend<br/>(LLM / MCP / Agent / HTTP)
 
-    C->>AGW: POST /openai<br/>(no API key header)
-    AGW->>EA: Check auth
-    EA->>K8s: Lookup by label selector<br/>(provider: openai)
-    K8s-->>EA: No matching key
-    EA-->>AGW: 401 Unauthorized
-    AGW-->>C: 401 Unauthorized<br/>"API key is missing or invalid"
+    C->>AGW: POST /api<br/>(no credentials)
 
-    Note over C,LLM: Retry with API key
+    AGW->>AGW: Basic auth check:<br/>No Authorization header found
 
-    C->>AGW: POST /openai<br/>x-ai-api-key: N2YwMDIx...
-    AGW->>EA: Check auth
-    EA->>K8s: Lookup secrets with<br/>label: provider=openai
-    K8s-->>EA: Secret found, key matches
-    EA->>EA: Map API key → user identity<br/>(secret name)
-    EA-->>AGW: Authenticated ✓<br/>Set x-user-id header
-    AGW->>LLM: Forward request<br/>(x-user-id added, AGW injects LLM API key)
-    LLM-->>AGW: LLM Response
-    AGW->>AGW: Sanitize x-user-id<br/>from response
-    AGW-->>C: 200 OK + Response
+    AGW-->>C: 401 Unauthorized<br/>"no basic authentication credentials found"
+
+    Note over C,Backend: Retry with credentials
+
+    C->>AGW: POST /api<br/>Authorization: Basic dXNlcjpwYXNzd29yZA==
+
+    AGW->>AGW: Decode base64 → user:password
+    AGW->>AGW: Lookup user in policy config
+    AGW->>AGW: Verify APR1 hash<br/>(salt + hashed password)
+
+    alt mode: Strict — Credentials valid
+        AGW->>Backend: Forward request
+        Backend-->>AGW: Response
+        AGW-->>C: 200 OK + Response
+    else Credentials invalid
+        AGW-->>C: 401 Unauthorized
+    end
+
+    Note over C,Backend: Optional Mode
+
+    rect rgb(245, 245, 255)
+        Note over AGW: mode: Optional<br/>• Valid credentials → forward<br/>• Invalid credentials → 401 reject<br/>• No credentials → allow through
+    end
 ```
 
 ### Key Configuration
 
 ```yaml
-# AuthConfig
+# Users defined inline — no AuthConfig or Ext Auth Service needed
 spec:
-  configs:
-    - apiKeyAuth:
-        headerName: x-ai-api-key      # Custom header for API key
-        labelSelector:
-          provider: openai             # Match secrets by label
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    basicAuthentication:
+      mode: Strict                # or Optional
+      users:
+        - "user:$apr1$TYiryv0/$8BvzLUO9IfGPGGsPnAgSu1"
+```
 
-# K8s Secret
+---
+
+## 5. API Key Authentication (Native)
+
+API key auth is built into the AgentGateway proxy. API keys are long-lived UUIDs stored as Kubernetes Secrets. The proxy validates the API key from the `Authorization` header directly against the referenced secrets. **No external auth service is required.**
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant AGW as AgentGateway Proxy
+    participant K8s as K8s Secrets<br/>(API Keys)
+    participant Backend as Backend<br/>(LLM / MCP / Agent / HTTP)
+
+    C->>AGW: POST /api<br/>(no Authorization header)
+
+    AGW->>AGW: API key auth check:<br/>No API key found
+
+    AGW-->>C: 401 Unauthorized<br/>"no API Key found"
+
+    Note over C,Backend: Retry with API key
+
+    C->>AGW: POST /api<br/>Authorization: Bearer N2YwMDIx...
+
+    AGW->>K8s: Lookup referenced secret<br/>(by name or label selector)
+    K8s-->>AGW: Secret found
+
+    AGW->>AGW: Compare API key from<br/>Authorization header vs secret
+
+    alt mode: Strict — Key valid
+        AGW->>Backend: Forward request
+        Backend-->>AGW: Response
+        AGW-->>C: 200 OK + Response
+    else Key invalid
+        AGW-->>C: 401 Unauthorized
+    end
+
+    Note over C,Backend: Optional Mode
+
+    rect rgb(245, 245, 255)
+        Note over AGW: mode: Optional<br/>• Valid API key → forward<br/>• Invalid API key → 401 reject<br/>• No API key → allow through
+    end
+```
+
+### Key Configuration
+
+```yaml
+# API key secret — referenced directly from the policy
+apiVersion: v1
+kind: Secret
 type: extauth.solo.io/apikey
 metadata:
+  name: apikey
   labels:
-    provider: openai
+    app: httpbin
 stringData:
   api-key: N2YwMDIxZTEt...
+
+---
+# Policy — no AuthConfig or Ext Auth Service needed
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict                # or Optional
+      secretRef:
+        name: apikey              # Direct secret reference
+      # OR use label selector:
+      # secretSelector:
+      #   matchLabels:
+      #     app: httpbin
 ```
 
 ---
@@ -296,7 +326,7 @@ sequenceDiagram
     participant C as Client / Agent
     participant AGW as AgentGateway Proxy
     participant BYO as Your Ext Auth Service<br/>(gRPC)
-    participant LLM as LLM Provider / Backend
+    participant Backend as Backend<br/>(LLM / MCP / Agent / HTTP)
 
     C->>AGW: Request to protected route
 
@@ -306,8 +336,8 @@ sequenceDiagram
 
     alt Authorized
         BYO-->>AGW: ALLOW<br/>(optional: inject headers)
-        AGW->>LLM: Forward request
-        LLM-->>AGW: Response
+        AGW->>Backend: Forward request
+        Backend-->>AGW: Response
         AGW-->>C: 200 OK + Response
     else Not Authorized
         BYO-->>AGW: DENY<br/>(status code, message)
@@ -666,7 +696,9 @@ sequenceDiagram
         U->>AGW: Request + Bearer JWT
         AGW->>AGW: JWT Auth (native):<br/>Verify signature via JWKS<br/>Check iss, aud, exp
 
-        Note right of AGW: OR use Ext Auth Service<br/>for Basic / API Key / OAuth
+        AGW->>AGW: Native Basic / API Key auth<br/>(if configured, no ext service)
+
+        Note right of AGW: OR use Ext Auth Service<br/>for OAuth / BYO auth
         AGW->>EA: Ext Auth check (if configured)
         EA-->>AGW: Auth decision
     end
@@ -722,11 +754,11 @@ sequenceDiagram
 | Scenario | Recommended Option | Policy Resource |
 |---|---|---|
 | Browser-based web apps calling APIs | **CORS** + **CSRF** | EnterpriseAgentgatewayPolicy |
-| Simple service-to-service auth | **API Key** | AuthConfig + EnterpriseAgentgatewayPolicy |
+| Simple service-to-service auth | **API Key** (native) | EnterpriseAgentgatewayPolicy + K8s Secret |
 | Human users logging in (interactive) | **OAuth Authorization Code** | AuthConfig + EnterpriseAgentgatewayPolicy |
 | Programmatic API access with IdP | **OAuth Access Token** or **JWT** | AuthConfig or EnterpriseAgentgatewayPolicy |
 | High-performance token validation | **JWT (Native)** | EnterpriseAgentgatewayPolicy |
 | Agent acting on behalf of user | **OBO Token Exchange** | Helm values (STS) + JWT Policy |
 | Agent needs upstream API credentials | **Elicitations** | Helm values (STS) + Solo UI |
 | Custom auth logic / legacy systems | **BYO Ext Auth** | EnterpriseAgentgatewayPolicy |
-| Internal testing / simple scenarios | **Basic Auth** | AuthConfig + EnterpriseAgentgatewayPolicy |
+| Internal testing / simple scenarios | **Basic Auth** (native) | EnterpriseAgentgatewayPolicy |
