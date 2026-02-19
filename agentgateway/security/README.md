@@ -1,8 +1,27 @@
 # Solo Enterprise for AgentGateway - Security Architecture Diagrams
-
-> Prepared for Security/Governance Tech Board Review
-
----
+- [Solo Enterprise for AgentGateway - Security Architecture Diagrams](#solo-enterprise-for-agentgateway---security-architecture-diagrams)
+  - [1. Security Options Overview](#1-security-options-overview)
+  - [2. CORS - Cross-Origin Resource Sharing](#2-cors---cross-origin-resource-sharing)
+    - [Key Configuration (EnterpriseAgentgatewayPolicy)](#key-configuration-enterpriseagentgatewaypolicy)
+  - [3. CSRF - Cross-Site Request Forgery Protection](#3-csrf---cross-site-request-forgery-protection)
+    - [Key Configuration](#key-configuration)
+  - [4. External Auth - Basic Authentication](#4-external-auth---basic-authentication)
+    - [Key Resources](#key-resources)
+  - [5. External Auth - API Key Authentication](#5-external-auth---api-key-authentication)
+    - [Key Configuration](#key-configuration-1)
+  - [6. External Auth - BYO (Bring Your Own) External Auth Service](#6-external-auth---byo-bring-your-own-external-auth-service)
+    - [Key Configuration](#key-configuration-2)
+  - [7. OAuth - Authorization Code Flow (OIDC)](#7-oauth---authorization-code-flow-oidc)
+  - [8. OAuth - Access Token Validation](#8-oauth---access-token-validation)
+  - [9. JWT Authentication (Native - No ExtAuth)](#9-jwt-authentication-native---no-extauth)
+    - [Multi-Provider Support](#multi-provider-support)
+  - [10. On-Behalf-Of (OBO) Token Exchange](#10-on-behalf-of-obo-token-exchange)
+    - [Token Exchange Architecture](#token-exchange-architecture)
+  - [11. Elicitations - Credential Gathering for Upstream APIs](#11-elicitations---credential-gathering-for-upstream-apis)
+    - [Elicitation Lifecycle](#elicitation-lifecycle)
+  - [12. Combined Security Architecture - End-to-End Deployment View](#12-combined-security-architecture---end-to-end-deployment-view)
+  - [Appendix: Kubernetes Resource Relationships](#appendix-kubernetes-resource-relationships)
+  - [Quick Reference: Which Security Option to Use](#quick-reference-which-security-option-to-use)
 
 ## 1. Security Options Overview
 
