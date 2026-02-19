@@ -20,7 +20,6 @@
   - [11. Elicitations - Credential Gathering for Upstream APIs](#11-elicitations---credential-gathering-for-upstream-apis)
     - [Elicitation Lifecycle](#elicitation-lifecycle)
   - [12. Combined Security Architecture - End-to-End Deployment View](#12-combined-security-architecture---end-to-end-deployment-view)
-  - [Appendix: Kubernetes Resource Relationships](#appendix-kubernetes-resource-relationships)
   - [Quick Reference: Which Security Option to Use](#quick-reference-which-security-option-to-use)
 
 ## 1. Security Options Overview
@@ -714,59 +713,6 @@ sequenceDiagram
     end
 
     Agent-->>U: Final response
-```
-
----
-
-## Appendix: Kubernetes Resource Relationships
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Kubernetes Cluster                               │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  agentgateway-system namespace                              │   │
-│  │                                                             │   │
-│  │  ┌───────────────┐    ┌──────────────────────────────────┐ │   │
-│  │  │ Gateway       │    │ EnterpriseAgentgatewayPolicy     │ │   │
-│  │  │ (K8s GW API)  │◄───│                                  │ │   │
-│  │  │               │    │ Security configs:                 │ │   │
-│  │  │ Listeners:    │    │  • traffic.cors                  │ │   │
-│  │  │  - HTTP :80   │    │  • traffic.csrf                  │ │   │
-│  │  │  - HTTPS :443 │    │  • traffic.jwtAuthentication     │ │   │
-│  │  └───────┬───────┘    │  • traffic.entExtAuth            │ │   │
-│  │          │            │  • traffic.extAuth (BYO)         │ │   │
-│  │          ▼            │  • backend.tokenExchange         │ │   │
-│  │  ┌───────────────┐    └──────────────────────────────────┘ │   │
-│  │  │ HTTPRoute     │                                         │   │
-│  │  │ (routing)     │    ┌──────────────────────────────────┐ │   │
-│  │  │               │    │ AuthConfig (extauth.solo.io)     │ │   │
-│  │  │ Rules:        │    │                                  │ │   │
-│  │  │  /openai → LLM│    │  • basicAuth (user/pass)        │ │   │
-│  │  │  /mcp → MCP   │    │  • apiKeyAuth (header + labels) │ │   │
-│  │  │  /agent → App │    │  • oauth2.accessTokenValidation  │ │   │
-│  │  └───────────────┘    │  • oauth2.oidcAuthorizationCode  │ │   │
-│  │                       └──────────────────────────────────┘ │   │
-│  │  ┌───────────────┐    ┌──────────────────────────────────┐ │   │
-│  │  │ Ext Auth Svc  │    │ Secrets                          │ │   │
-│  │  │ (port 8083)   │    │  • API keys (extauth.solo.io)   │ │   │
-│  │  └───────────────┘    │  • OAuth client secrets          │ │   │
-│  │                       │  • Elicitation OIDC config       │ │   │
-│  │  ┌───────────────┐    └──────────────────────────────────┘ │   │
-│  │  │ Redis         │                                         │   │
-│  │  │ (sessions)    │    ┌──────────────────────────────────┐ │   │
-│  │  └───────────────┘    │ STS Token Exchange Server       │ │   │
-│  │                       │ (port 7777)                      │ │   │
-│  │                       │  • OBO token exchange            │ │   │
-│  │                       │  • Elicitations                  │ │   │
-│  │                       └──────────────────────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
-│  │ keycloak ns  │  │ httpbin ns   │  │ agent ns                 │ │
-│  │ (OIDC IdP)   │  │ (sample app) │  │ (AI Agents + K8s SA)     │ │
-│  └──────────────┘  └──────────────┘  └──────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
