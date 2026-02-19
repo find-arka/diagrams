@@ -90,6 +90,8 @@ graph TB
 
 ## 2. CORS - Cross-Origin Resource Sharing
 
+> **Docs:** [CORS](https://docs.solo.io/agentgateway/2.1.x/security/cors/)
+
 CORS policies control which web origins can interact with AgentGateway-protected resources. Configured via **HTTPRoute filters** or **EnterpriseAgentgatewayPolicy**.
 
 ```mermaid
@@ -118,6 +120,8 @@ sequenceDiagram
 ---
 
 ## 3. CSRF - Cross-Site Request Forgery Protection
+
+> **Docs:** [CSRF](https://docs.solo.io/agentgateway/2.1.x/security/csrf/)
 
 CSRF protection validates that the `Origin` header of incoming requests matches the destination to block forged requests from malicious sites.
 
@@ -153,6 +157,8 @@ sequenceDiagram
 ---
 
 ## 4. Basic Authentication (Native)
+
+> **Docs:** [Basic auth](https://docs.solo.io/agentgateway/2.1.x/security/extauth/basic/)
 
 Basic auth is built into the AgentGateway proxy. It sends base64-encoded `username:password` credentials in the `Authorization` header. The proxy validates against APR1-hashed passwords configured directly in the policy. **No external auth service is required.**
 
@@ -194,6 +200,8 @@ sequenceDiagram
 ---
 
 ## 5. API Key Authentication (Native)
+
+> **Docs:** [API key auth](https://docs.solo.io/agentgateway/2.1.x/security/extauth/apikey/)
 
 API key auth is built into the AgentGateway proxy. API keys are long-lived UUIDs stored as Kubernetes Secrets. The proxy validates the API key from the `Authorization` header directly against the referenced secrets. **No external auth service is required.**
 
@@ -238,6 +246,8 @@ sequenceDiagram
 
 ## 6. External Auth - BYO (Bring Your Own) External Auth Service
 
+> **Docs:** [BYO ext auth service](https://docs.solo.io/agentgateway/2.1.x/security/extauth/byo-ext-auth-service/)
+
 Integrate any custom gRPC-based external authorization service with AgentGateway. The gateway delegates auth decisions to your service.
 
 ```mermaid
@@ -267,6 +277,8 @@ sequenceDiagram
 ---
 
 ## 7. OAuth - Authorization Code Flow (OIDC)
+
+> **Docs:** [About OAuth](https://docs.solo.io/agentgateway/2.1.x/security/extauth/oauth/about/) | [Authorization Code](https://docs.solo.io/agentgateway/2.1.x/security/extauth/oauth/authorization-code/) | [Keycloak setup](https://docs.solo.io/agentgateway/2.1.x/security/extauth/oauth/keycloak/)
 
 For browser-based / interactive access. The gateway intercepts unauthenticated requests, redirects to the IdP for login, exchanges the authorization code for tokens, and stores a session cookie.
 
@@ -317,6 +329,8 @@ sequenceDiagram
 
 ## 8. OAuth - Access Token Validation
 
+> **Docs:** [Access Token Validation](https://docs.solo.io/agentgateway/2.1.x/security/extauth/oauth/access-token/)
+
 For programmatic/API access. The client obtains an access token from the IdP out-of-band and includes it in requests. The gateway validates the token signature using JWKS.
 
 ```mermaid
@@ -353,6 +367,8 @@ sequenceDiagram
 ---
 
 ## 9. JWT Authentication (Native - No ExtAuth)
+
+> **Docs:** [About JWT auth](https://docs.solo.io/agentgateway/2.1.x/security/jwt/about/) | [Set up JWT auth](https://docs.solo.io/agentgateway/2.1.x/security/jwt/setup/)
 
 AgentGateway supports native JWT validation directly at the proxy layer (without the Ext Auth service). Supports remote JWKS with auto-rotation and multiple providers.
 
@@ -423,6 +439,8 @@ graph LR
 ---
 
 ## 10. On-Behalf-Of (OBO) Token Exchange
+
+> **Docs:** [About OBO and elicitations](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/about/) | [OBO token exchange](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/obo/)
 
 OBO token exchange (RFC 8693) enables agents to act on behalf of users by exchanging the user's JWT for a delegated token that includes both user and agent identities.
 
@@ -497,6 +515,8 @@ sequenceDiagram
 ---
 
 ## 11. Elicitations - Credential Gathering for Upstream APIs
+
+> **Docs:** [About OBO and elicitations](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/about/) | [Elicitations](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/elicitations/)
 
 Elicitations (MCP Protocol specification) enable AgentGateway to gather OAuth credentials from users when an upstream API requires tokens that are not yet available. Uses the Solo Enterprise UI for the OAuth authorization flow.
 
