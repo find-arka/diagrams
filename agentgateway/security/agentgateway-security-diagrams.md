@@ -18,7 +18,7 @@ graph TB
 
     subgraph AGW["Solo Enterprise for AgentGateway"]
         direction TB
-        GW["Gateway Proxy<br/>(Envoy-based)"]
+        GW["Gateway Proxy<br/>(Rust-based)"]
 
         subgraph BrowserSec["Browser Security"]
             CORS["CORS Policy"]
@@ -623,7 +623,7 @@ This diagram shows how all security layers work together in a typical enterprise
 sequenceDiagram
     participant U as End User /<br/>AI Agent Client
     participant IdP as OIDC Identity Provider<br/>(Keycloak / Okta / Azure AD)
-    participant AGW as AgentGateway Proxy<br/>(Envoy-based)
+    participant AGW as AgentGateway Proxy<br/>(Rust-based)
     participant EA as Ext Auth Service<br/>(Solo Enterprise)
     participant STS as STS Token Exchange<br/>(Port 7777)
     participant Agent as AI Agent<br/>(K8s Pod)
