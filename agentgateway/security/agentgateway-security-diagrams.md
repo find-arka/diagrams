@@ -1,0 +1,767 @@
+# Solo Enterprise for AgentGateway - Security Architecture Diagrams
+
+> Prepared for Security/Governance Tech Board Review
+
+---
+
+## 1. Security Options Overview
+
+The following diagram shows the full landscape of security controls available in Solo Enterprise for AgentGateway. Each subsequent section dives deeper into individual flows.
+
+```mermaid
+graph TB
+    subgraph Clients["Client Layer"]
+        Browser["Browser / Web App"]
+        Agent["AI Agent / Service"]
+        MCP_Client["MCP Client"]
+    end
+
+    subgraph AGW["Solo Enterprise for AgentGateway"]
+        direction TB
+        GW["Gateway Proxy<br/>(Envoy-based)"]
+
+        subgraph BrowserSec["Browser Security"]
+            CORS["CORS Policy"]
+            CSRF["CSRF Protection"]
+        end
+
+        subgraph AuthN["Authentication"]
+            JWT_Auth["JWT Authentication<br/>(Native)"]
+            ExtAuth["External Auth Service"]
+            BasicAuth["Basic Auth"]
+            APIKey["API Key Auth"]
+            OAuth_AC["OAuth Authorization Code"]
+            OAuth_AT["OAuth Access Token<br/>Validation"]
+            BYO["BYO Ext Auth Service"]
+        end
+
+        subgraph TokenExchange["Token Exchange (STS)"]
+            OBO["On-Behalf-Of<br/>Token Exchange"]
+            Elicit["Elicitations<br/>(Credential Gathering)"]
+        end
+    end
+
+    subgraph IdPs["Identity Providers"]
+        Keycloak["Keycloak / OIDC IdP"]
+        ExtOAuth["External OAuth Provider<br/>(e.g., GitHub)"]
+    end
+
+    subgraph Backends["Backend Services"]
+        LLM["LLM Providers<br/>(OpenAI, Anthropic, etc.)"]
+        MCP_Server["MCP Tool Servers"]
+        AgentBackend["Agent / App Backends"]
+    end
+
+    Browser --> CORS & CSRF
+    CORS & CSRF --> GW
+    Agent --> GW
+    MCP_Client --> GW
+
+    GW --> JWT_Auth & ExtAuth
+    ExtAuth --> BasicAuth & APIKey & OAuth_AC & OAuth_AT & BYO
+    GW --> OBO & Elicit
+
+    JWT_Auth -.->|JWKS| Keycloak
+    OAuth_AC -.->|OIDC| Keycloak
+    OAuth_AT -.->|OIDC| Keycloak
+    OBO -.->|Subject Token Validation| Keycloak
+    Elicit -.->|OAuth Flow| ExtOAuth
+
+    GW --> LLM & MCP_Server & AgentBackend
+```
+
+---
+
+## 2. CORS - Cross-Origin Resource Sharing
+
+CORS policies control which web origins can interact with AgentGateway-protected resources. Configured via **HTTPRoute filters** or **EnterpriseAgentgatewayPolicy**.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (JavaScript)
+    participant AGW as AgentGateway Proxy
+    participant Backend as Backend Service<br/>(LLM / MCP / Agent)
+
+    Note over B,Backend: CORS Preflight Flow
+
+    B->>AGW: OPTIONS /api (Preflight)<br/>Origin: https://app.example.com
+    AGW->>AGW: Check origin against<br/>allowOrigins list
+
+    alt Origin Allowed
+        AGW-->>B: 200 OK<br/>access-control-allow-origin: https://app.example.com<br/>access-control-allow-methods: GET, POST, OPTIONS<br/>access-control-allow-headers: Authorization, Content-Type<br/>access-control-max-age: 86400
+        B->>AGW: POST /api (Actual Request)<br/>Origin: https://app.example.com<br/>Authorization: Bearer <token>
+        AGW->>Backend: Forward request
+        Backend-->>AGW: Response
+        AGW-->>B: Response + CORS headers
+    else Origin NOT Allowed
+        AGW-->>B: 200 OK (no CORS headers)<br/>Browser blocks the response
+        Note over B: Browser denies access<br/>to response data
+    end
+```
+
+### Key Configuration (EnterpriseAgentgatewayPolicy)
+
+```yaml
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    cors:
+      allowOrigins: ["https://app.example.com"]
+      allowMethods: ["GET", "POST", "OPTIONS"]
+      allowHeaders: ["Authorization", "Content-Type"]
+      allowCredentials: true
+      maxAge: 86400
+```
+
+---
+
+## 3. CSRF - Cross-Site Request Forgery Protection
+
+CSRF protection validates that the `Origin` header of incoming requests matches the destination to block forged requests from malicious sites.
+
+```mermaid
+sequenceDiagram
+    participant Attacker as Malicious Site<br/>(attacker.com)
+    participant User as User's Browser
+    participant AGW as AgentGateway Proxy
+    participant Backend as Backend Service
+
+    Note over Attacker,Backend: CSRF Attack Attempt
+
+    Attacker->>User: Trick user into visiting<br/>malicious page with hidden form
+    User->>AGW: POST /api/action<br/>Origin: malicioussite.com<br/>Cookie: session=abc123
+
+    AGW->>AGW: CSRF validation:<br/>Origin (malicioussite.com)<br/>vs Destination (api.example.com)
+
+    alt Origin does NOT match destination<br/>and NOT in additionalOrigins
+        AGW-->>User: 403 Forbidden<br/>"CSRF validation failed"
+        Note over User,AGW: Attack blocked
+    end
+
+    Note over User,Backend: Legitimate Request
+
+    User->>AGW: POST /api/action<br/>Origin: allowThisOne.example.com<br/>Cookie: session=abc123
+
+    AGW->>AGW: CSRF validation:<br/>Origin in additionalOrigins list
+    AGW->>Backend: Forward request
+    Backend-->>AGW: 200 OK
+    AGW-->>User: 200 OK
+```
+
+### Key Configuration
+
+```yaml
+spec:
+  traffic:
+    csrf:
+      additionalOrigins:
+        - example.org
+        - allowThisOne.example.com
+```
+
+---
+
+## 4. External Auth - Basic Authentication
+
+Basic auth sends base64-encoded `username:password` credentials in the `Authorization` header. The gateway validates against a dictionary of APR1-hashed passwords stored in an **AuthConfig**.
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant AGW as AgentGateway Proxy
+    participant EA as Ext Auth Service
+    participant AC as AuthConfig<br/>(User/Password Store)
+    participant LLM as LLM Provider
+
+    C->>AGW: POST /openai<br/>(no credentials)
+    AGW->>EA: Check auth
+    EA->>AC: Lookup credentials
+    AC-->>EA: No match
+    EA-->>AGW: 401 Unauthorized
+    AGW-->>C: 401 Unauthorized<br/>"API key is missing or invalid"
+
+    Note over C,LLM: Retry with credentials
+
+    C->>AGW: POST /openai<br/>Authorization: Basic dXNlcjpwYXNzd29yZA==
+    AGW->>EA: Check auth
+    EA->>EA: Decode base64 → user:password
+    EA->>AC: Lookup user, verify APR1 hash<br/>(salt + hashed password)
+    AC-->>EA: Match found
+    EA-->>AGW: Authenticated ✓
+    AGW->>LLM: Forward request<br/>(AGW injects LLM API key)
+    LLM-->>AGW: LLM Response
+    AGW-->>C: 200 OK + Response
+```
+
+### Key Resources
+
+```
+┌─────────────────────┐     ┌──────────────────────────────┐
+│  AuthConfig         │     │  EnterpriseAgentgatewayPolicy│
+│  (extauth.solo.io)  │◄────│  (traffic.entExtAuth)        │
+│                     │     │                              │
+│  basicAuth:         │     │  targetRefs: Gateway         │
+│    apr:             │     │  authConfigRef: basic-auth   │
+│      users:         │     │  backendRef: ext-auth-svc    │
+│        user:        │     │                              │
+│          salt: ...  │     └──────────────────────────────┘
+│          hashedPw..│
+└─────────────────────┘
+```
+
+---
+
+## 5. External Auth - API Key Authentication
+
+API keys are long-lived UUIDs stored as Kubernetes Secrets. AgentGateway matches the API key from a configurable request header against the stored secrets.
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant AGW as AgentGateway Proxy
+    participant EA as Ext Auth Service
+    participant K8s as K8s Secrets<br/>(API Keys)
+    participant LLM as LLM Provider
+
+    C->>AGW: POST /openai<br/>(no API key header)
+    AGW->>EA: Check auth
+    EA->>K8s: Lookup by label selector<br/>(provider: openai)
+    K8s-->>EA: No matching key
+    EA-->>AGW: 401 Unauthorized
+    AGW-->>C: 401 Unauthorized<br/>"API key is missing or invalid"
+
+    Note over C,LLM: Retry with API key
+
+    C->>AGW: POST /openai<br/>x-ai-api-key: N2YwMDIx...
+    AGW->>EA: Check auth
+    EA->>K8s: Lookup secrets with<br/>label: provider=openai
+    K8s-->>EA: Secret found, key matches
+    EA->>EA: Map API key → user identity<br/>(secret name)
+    EA-->>AGW: Authenticated ✓<br/>Set x-user-id header
+    AGW->>LLM: Forward request<br/>(x-user-id added, AGW injects LLM API key)
+    LLM-->>AGW: LLM Response
+    AGW->>AGW: Sanitize x-user-id<br/>from response
+    AGW-->>C: 200 OK + Response
+```
+
+### Key Configuration
+
+```yaml
+# AuthConfig
+spec:
+  configs:
+    - apiKeyAuth:
+        headerName: x-ai-api-key      # Custom header for API key
+        labelSelector:
+          provider: openai             # Match secrets by label
+
+# K8s Secret
+type: extauth.solo.io/apikey
+metadata:
+  labels:
+    provider: openai
+stringData:
+  api-key: N2YwMDIxZTEt...
+```
+
+---
+
+## 6. External Auth - BYO (Bring Your Own) External Auth Service
+
+Integrate any custom gRPC-based external authorization service with AgentGateway. The gateway delegates auth decisions to your service.
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant AGW as AgentGateway Proxy
+    participant BYO as Your Ext Auth Service<br/>(gRPC)
+    participant LLM as LLM Provider / Backend
+
+    C->>AGW: Request to protected route
+
+    AGW->>BYO: gRPC Authorization Request<br/>(headers, path, method)
+
+    BYO->>BYO: Custom authorization logic<br/>(check headers, tokens,<br/>database lookups, etc.)
+
+    alt Authorized
+        BYO-->>AGW: ALLOW<br/>(optional: inject headers)
+        AGW->>LLM: Forward request
+        LLM-->>AGW: Response
+        AGW-->>C: 200 OK + Response
+    else Not Authorized
+        BYO-->>AGW: DENY<br/>(status code, message)
+        AGW-->>C: 403 Forbidden<br/>"denied by ext_authz"
+    end
+```
+
+### Key Configuration
+
+```yaml
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway              # or HTTPRoute for route-level
+      name: agentgateway-proxy
+  traffic:
+    extAuth:
+      backendRef:
+        name: ext-authz          # Your auth service
+        namespace: agentgateway-system
+        port: 4444
+      grpc: {}                   # gRPC protocol
+```
+
+---
+
+## 7. OAuth - Authorization Code Flow (OIDC)
+
+For browser-based / interactive access. The gateway intercepts unauthenticated requests, redirects to the IdP for login, exchanges the authorization code for tokens, and stores a session cookie.
+
+```mermaid
+sequenceDiagram
+    participant U as User (Browser)
+    participant AGW as AgentGateway Proxy
+    participant EA as Ext Auth Service
+    participant IdP as OIDC IdP<br/>(e.g., Keycloak)
+    participant Redis as Redis<br/>(Session Store)
+    participant LLM as LLM Provider
+
+    U->>AGW: GET /openai (no session cookie)
+    AGW->>EA: Check auth
+    EA-->>AGW: No valid session
+
+    AGW-->>U: 302 Redirect → IdP login URL<br/>/realms/master/protocol/openid-connect/auth<br/>?client_id=...&redirect_uri=...&response_type=code&scope=email+openid
+
+    U->>IdP: User visits login page
+    U->>IdP: Enter credentials (user1 / password)
+    IdP->>IdP: Authenticate user
+
+    IdP-->>U: 302 Redirect → callback URL<br/>/openai?code=AUTH_CODE&state=...
+
+    U->>AGW: GET /openai?code=AUTH_CODE
+    AGW->>EA: Exchange authorization code
+    EA->>IdP: POST /token<br/>(code + client_id + client_secret)
+    IdP-->>EA: ID Token + Access Token
+
+    EA->>Redis: Store session<br/>(keycloak-session cookie)
+    EA-->>AGW: Authenticated ✓<br/>Set-Cookie: keycloak-session=...
+
+    AGW-->>U: Set-Cookie + redirect to /openai
+
+    Note over U,LLM: Subsequent Requests
+
+    U->>AGW: POST /openai<br/>Cookie: keycloak-session=...
+    AGW->>EA: Validate session
+    EA->>Redis: Lookup session
+    Redis-->>EA: Valid session + tokens
+    EA-->>AGW: Authenticated ✓<br/>(forward JWT as header)
+    AGW->>LLM: Forward request
+    LLM-->>AGW: Response
+    AGW-->>U: 200 OK + Response
+```
+
+---
+
+## 8. OAuth - Access Token Validation
+
+For programmatic/API access. The client obtains an access token from the IdP out-of-band and includes it in requests. The gateway validates the token signature using JWKS.
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant IdP as OIDC IdP<br/>(e.g., Keycloak)
+    participant AGW as AgentGateway Proxy
+    participant EA as Ext Auth Service
+    participant LLM as LLM Provider
+
+    Note over C,IdP: Step 1: Client obtains token out-of-band
+
+    C->>IdP: POST /token<br/>(client_credentials or password grant)<br/>client_id, client_secret, username, password
+    IdP-->>C: Access Token (JWT)<br/>(iss, aud, exp, scopes)
+
+    Note over C,LLM: Step 2: Client calls AgentGateway with token
+
+    C->>AGW: POST /openai<br/>Authorization: Bearer <access_token>
+    AGW->>EA: Validate token
+
+    EA->>EA: JWT Validation:<br/>1. Verify RS256 signature (JWKS)<br/>2. Check issuer (iss)<br/>3. Check audience (aud)<br/>4. Check expiration (exp)
+
+    alt Token Valid
+        EA-->>AGW: Authenticated ✓
+        AGW->>LLM: Forward request<br/>(AGW injects LLM API key)
+        LLM-->>AGW: Response
+        AGW-->>C: 200 OK + Response
+    else Token Invalid or Expired
+        EA-->>AGW: 403 Forbidden
+        AGW-->>C: 403 Forbidden<br/>"external authorization failed"
+    end
+```
+
+---
+
+## 9. JWT Authentication (Native - No ExtAuth)
+
+AgentGateway supports native JWT validation directly at the proxy layer (without the Ext Auth service). Supports remote JWKS with auto-rotation and multiple providers.
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant AGW as AgentGateway Proxy
+    participant JWKS as JWKS Endpoint<br/>(IdP, e.g., Keycloak)
+    participant Backend as Backend Service<br/>(LLM / MCP / Agent)
+
+    Note over AGW,JWKS: Startup: Proxy fetches & caches JWKS
+
+    AGW->>JWKS: GET /realms/master/protocol/<br/>openid-connect/certs
+    JWKS-->>AGW: JWKS response (public keys)<br/>Cached for cacheDuration (e.g., 5m)
+
+    Note over C,Backend: Request Flow
+
+    C->>AGW: POST /api<br/>Authorization: Bearer <JWT>
+
+    AGW->>AGW: Extract JWT from Bearer header
+    AGW->>AGW: Read kid from JWT header
+    AGW->>AGW: Match kid → cached public key
+    AGW->>AGW: Verify signature (RS256)
+    AGW->>AGW: Validate claims:<br/>• issuer (iss)<br/>• audience (aud) [optional]<br/>• expiration (exp)
+
+    alt mode: Strict — Valid JWT required
+        AGW->>Backend: Forward request
+        Backend-->>AGW: Response
+        AGW-->>C: 200 OK
+
+    else mode: Strict — No JWT or invalid
+        AGW-->>C: 401 Unauthorized<br/>"no bearer token found"
+    end
+
+    Note over C,Backend: Optional & Permissive Modes
+
+    rect rgb(245, 245, 255)
+        Note over AGW: mode: Optional<br/>• Valid JWT → forward<br/>• Invalid JWT → 401 reject<br/>• No JWT → allow through
+
+        Note over AGW: mode: Permissive<br/>• Valid JWT → forward<br/>• Invalid JWT → allow through<br/>• No JWT → allow through
+    end
+```
+
+### Multi-Provider Support
+
+```mermaid
+graph LR
+    subgraph AGW["AgentGateway Proxy"]
+        JWT["JWT Authentication<br/>(EnterpriseAgentgatewayPolicy)"]
+    end
+
+    subgraph Providers["Configured JWT Providers"]
+        P1["Provider 1: Keycloak<br/>issuer: keycloak/realms/master<br/>audiences: [my-app]<br/>JWKS: remote"]
+        P2["Provider 2: Auth0<br/>issuer: auth0.example.com<br/>audiences: [my-other-app]<br/>JWKS: remote"]
+        P3["Provider 3: Custom<br/>issuer: custom-idp.internal<br/>JWKS: inline"]
+    end
+
+    JWT --> P1
+    JWT --> P2
+    JWT --> P3
+
+    Note["Token's iss claim determines<br/>which provider validates it"]
+
+    style AGW fill:#e8f4fd,stroke:#1a73e8
+    style Providers fill:#f0f9e8,stroke:#34a853
+```
+
+---
+
+## 10. On-Behalf-Of (OBO) Token Exchange
+
+OBO token exchange (RFC 8693) enables agents to act on behalf of users by exchanging the user's JWT for a delegated token that includes both user and agent identities.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as AI Agent
+    participant STS as AgentGateway STS<br/>(Token Exchange Server<br/>port 7777)
+    participant IdP as OIDC IdP<br/>(e.g., Keycloak)
+    participant AGW as AgentGateway Proxy
+    participant MCP as MCP Tool Server
+
+    Note over U,MCP: Step 1: User authenticates and calls agent
+
+    U->>IdP: Authenticate (login)
+    IdP-->>U: OAuth Access Token (JWT)<br/>(iss, aud, sub=user1, scopes)
+
+    U->>A: Call agent with JWT<br/>Authorization: Bearer <user_jwt>
+
+    Note over A,STS: Step 2: Agent exchanges token via STS
+
+    A->>STS: Token Exchange Request (RFC 8693)<br/>• subject_token: user's JWT<br/>• actor_token: K8s ServiceAccount token<br/>• grant_type: urn:ietf:params:oauth:grant-type:token-exchange
+
+    STS->>IdP: Validate subject token<br/>(JWKS verification)
+    IdP-->>STS: Token valid ✓
+
+    STS->>STS: Validate actor token<br/>(K8s token review)
+    STS->>STS: Generate delegated token<br/>• Sub: user identity<br/>• Act: agent identity<br/>• Scopes: downscoped
+    STS-->>A: Delegated Token (JWT)<br/>(includes both user + agent identity)
+
+    Note over A,MCP: Step 3: Agent calls MCP with delegated token
+
+    A->>AGW: MCP tool call<br/>Authorization: Bearer <delegated_token>
+
+    AGW->>AGW: JWT validation<br/>(verify against STS issuer JWKS)
+
+    AGW->>AGW: Policy evaluation:<br/>• Check user identity (sub)<br/>• Check agent identity (act)<br/>• Enforce RBAC / scopes
+
+    AGW->>MCP: Forward tool call
+    MCP-->>AGW: Tool result
+    AGW-->>A: Tool result
+    A-->>U: Final response
+
+    Note over U,MCP: Audit log captures full chain:<br/>User → Agent → Tool
+```
+
+### Token Exchange Architecture
+
+```
+┌──────────────┐       ┌─────────────────────────────────────┐
+│   AI Agent   │       │  Solo Enterprise for AgentGateway   │
+│              │       │                                     │
+│  Holds:      │       │  ┌───────────────────────────────┐  │
+│  • User JWT  │──────►│  │  STS (Token Exchange Server)  │  │
+│  • K8s SA    │       │  │  Port 7777                    │  │
+│    token     │       │  │                               │  │
+│              │       │  │  subjectValidator: remote     │  │
+│  Does NOT    │       │  │    (OIDC JWKS URL)            │  │
+│  hold:       │       │  │  actorValidator: k8s          │  │
+│  • LLM keys  │       │  │    (ServiceAccount tokens)    │  │
+│  • Tool creds│       │  │  tokenExpiration: 24h         │  │
+│              │       │  └───────────────────────────────┘  │
+│              │       │                                     │
+│              │       │  ┌───────────────────────────────┐  │
+│              │──────►│  │  Gateway Proxy                │  │
+│              │       │  │  JWT Policy validates          │  │
+│              │       │  │  delegated tokens from STS    │  │
+│              │       │  └───────────────────────────────┘  │
+└──────────────┘       └─────────────────────────────────────┘
+```
+
+---
+
+## 11. Elicitations - Credential Gathering for Upstream APIs
+
+Elicitations (MCP Protocol specification) enable AgentGateway to gather OAuth credentials from users when an upstream API requires tokens that are not yet available. Uses the Solo Enterprise UI for the OAuth authorization flow.
+
+```mermaid
+sequenceDiagram
+    participant C as Client / Agent
+    participant AGW as AgentGateway Proxy
+    participant STS as AgentGateway STS<br/>(Token Exchange Server)
+    participant UI as Solo Enterprise UI
+    participant ExtIdP as External OAuth Provider<br/>(e.g., GitHub)
+    participant API as Upstream API<br/>(e.g., GitHub API)
+
+    Note over C,API: Step 1: Initial request — no upstream token available
+
+    C->>AGW: Request to upstream API<br/>Authorization: Bearer <user_jwt>
+    AGW->>STS: Request upstream token<br/>for this user + service
+    STS->>STS: No stored token found
+    STS-->>AGW: Elicitation URL (PENDING)<br/>status: PENDING
+    AGW-->>C: Token exchange needed<br/>Elicitation URL provided
+
+    Note over UI,ExtIdP: Step 2: User authorizes via Solo Enterprise UI
+
+    UI->>UI: Admin opens Elicitations page<br/>Sees pending elicitation
+    UI->>ExtIdP: Click "Authorize" →<br/>Redirect to OAuth provider
+    ExtIdP->>ExtIdP: User logs in &<br/>grants consent
+    ExtIdP-->>UI: Redirect back with<br/>authorization code
+    UI->>STS: Complete elicitation<br/>(authorization code)
+    STS->>ExtIdP: Exchange code for token
+    ExtIdP-->>STS: Access Token for upstream API
+    STS->>STS: Store token<br/>Elicitation → COMPLETED
+
+    Note over C,API: Step 3: Retry request — token now available
+
+    C->>AGW: Retry request to upstream API<br/>Authorization: Bearer <user_jwt>
+    AGW->>STS: Request upstream token
+    STS-->>AGW: Stored token found ✓
+    AGW->>API: Forward request<br/>Authorization: Bearer <upstream_oauth_token><br/>(injected by AGW)
+    API-->>AGW: Response
+    AGW-->>C: 200 OK + Response
+
+    Note over C,API: Upstream credentials never exposed<br/>to MCP servers or agents
+```
+
+### Elicitation Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: Request needs upstream token<br/>Token not found in STS
+    PENDING --> COMPLETED: User completes OAuth flow<br/>via Solo Enterprise UI
+    PENDING --> FAILED: OAuth flow fails or<br/>times out
+    COMPLETED --> [*]: Token available for injection<br/>into upstream requests
+    FAILED --> PENDING: User retries authorization
+
+    note right of PENDING
+        Elicitation URL returned
+        to caller. Admin opens
+        URL in Solo Enterprise UI.
+    end note
+
+    note right of COMPLETED
+        Token stored in STS.
+        AgentGateway injects token
+        into upstream requests.
+    end note
+```
+
+---
+
+## 12. Combined Security Architecture - End-to-End Deployment View
+
+This diagram shows how all security layers work together in a typical enterprise deployment.
+
+```mermaid
+sequenceDiagram
+    participant U as End User /<br/>AI Agent Client
+    participant IdP as OIDC Identity Provider<br/>(Keycloak / Okta / Azure AD)
+    participant AGW as AgentGateway Proxy<br/>(Envoy-based)
+    participant EA as Ext Auth Service<br/>(Solo Enterprise)
+    participant STS as STS Token Exchange<br/>(Port 7777)
+    participant Agent as AI Agent<br/>(K8s Pod)
+    participant LLM as LLM Provider<br/>(OpenAI / Anthropic)
+    participant MCP as MCP Tool Server<br/>(GitHub / DB / etc.)
+    participant ExtAPI as External API<br/>(GitHub API, etc.)
+
+    Note over U,ExtAPI: ── Layer 1: Browser Security (CORS + CSRF) ──
+
+    rect rgb(255, 248, 230)
+        U->>AGW: Preflight OPTIONS (if browser)
+        AGW->>AGW: CORS: validate origin<br/>CSRF: validate origin vs destination
+        AGW-->>U: CORS headers / 403 if blocked
+    end
+
+    Note over U,ExtAPI: ── Layer 2: Authentication ──
+
+    rect rgb(230, 245, 255)
+        U->>IdP: Authenticate (login / client_credentials)
+        IdP-->>U: Access Token (JWT)
+
+        U->>AGW: Request + Bearer JWT
+        AGW->>AGW: JWT Auth (native):<br/>Verify signature via JWKS<br/>Check iss, aud, exp
+
+        Note right of AGW: OR use Ext Auth Service<br/>for Basic / API Key / OAuth
+        AGW->>EA: Ext Auth check (if configured)
+        EA-->>AGW: Auth decision
+    end
+
+    Note over U,ExtAPI: ── Layer 3: Token Exchange (OBO) ──
+
+    rect rgb(230, 255, 230)
+        AGW->>Agent: Forward to AI Agent
+        Agent->>STS: Exchange user JWT for<br/>delegated token (OBO)
+        STS->>STS: Validate user token (JWKS)<br/>Validate agent (K8s SA)
+        STS-->>Agent: Delegated token<br/>(user + agent identity)
+    end
+
+    Note over U,ExtAPI: ── Layer 4: Downstream Calls ──
+
+    rect rgb(245, 230, 255)
+        Agent->>AGW: LLM request (no auth needed)
+        AGW->>AGW: PII redaction, prompt guard
+        AGW->>LLM: Forward (AGW injects API key)
+        LLM-->>AGW: Response
+        AGW->>AGW: Credential leak check
+        AGW-->>Agent: Sanitized response
+
+        Agent->>AGW: MCP tool call + delegated JWT
+        AGW->>AGW: Validate delegated token<br/>Check scopes / RBAC
+        AGW->>MCP: Execute tool call
+        MCP-->>AGW: Result
+        AGW-->>Agent: Tool result
+    end
+
+    Note over U,ExtAPI: ── Layer 5: Elicitations (if needed) ──
+
+    rect rgb(255, 240, 240)
+        Agent->>AGW: Call upstream API
+        AGW->>STS: Need upstream OAuth token
+        STS-->>AGW: Elicitation URL (PENDING)
+        Note over U: User completes OAuth flow<br/>via Solo Enterprise UI
+        STS->>STS: Store upstream token (COMPLETED)
+        Agent->>AGW: Retry upstream call
+        AGW->>STS: Fetch stored token
+        AGW->>ExtAPI: Inject upstream OAuth token
+        ExtAPI-->>AGW: Response
+        AGW-->>Agent: Response
+    end
+
+    Agent-->>U: Final response
+```
+
+---
+
+## Appendix: Kubernetes Resource Relationships
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Kubernetes Cluster                               │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  agentgateway-system namespace                              │   │
+│  │                                                             │   │
+│  │  ┌───────────────┐    ┌──────────────────────────────────┐ │   │
+│  │  │ Gateway       │    │ EnterpriseAgentgatewayPolicy     │ │   │
+│  │  │ (K8s GW API)  │◄───│                                  │ │   │
+│  │  │               │    │ Security configs:                 │ │   │
+│  │  │ Listeners:    │    │  • traffic.cors                  │ │   │
+│  │  │  - HTTP :80   │    │  • traffic.csrf                  │ │   │
+│  │  │  - HTTPS :443 │    │  • traffic.jwtAuthentication     │ │   │
+│  │  └───────┬───────┘    │  • traffic.entExtAuth            │ │   │
+│  │          │            │  • traffic.extAuth (BYO)         │ │   │
+│  │          ▼            │  • backend.tokenExchange         │ │   │
+│  │  ┌───────────────┐    └──────────────────────────────────┘ │   │
+│  │  │ HTTPRoute     │                                         │   │
+│  │  │ (routing)     │    ┌──────────────────────────────────┐ │   │
+│  │  │               │    │ AuthConfig (extauth.solo.io)     │ │   │
+│  │  │ Rules:        │    │                                  │ │   │
+│  │  │  /openai → LLM│    │  • basicAuth (user/pass)        │ │   │
+│  │  │  /mcp → MCP   │    │  • apiKeyAuth (header + labels) │ │   │
+│  │  │  /agent → App │    │  • oauth2.accessTokenValidation  │ │   │
+│  │  └───────────────┘    │  • oauth2.oidcAuthorizationCode  │ │   │
+│  │                       └──────────────────────────────────┘ │   │
+│  │  ┌───────────────┐    ┌──────────────────────────────────┐ │   │
+│  │  │ Ext Auth Svc  │    │ Secrets                          │ │   │
+│  │  │ (port 8083)   │    │  • API keys (extauth.solo.io)   │ │   │
+│  │  └───────────────┘    │  • OAuth client secrets          │ │   │
+│  │                       │  • Elicitation OIDC config       │ │   │
+│  │  ┌───────────────┐    └──────────────────────────────────┘ │   │
+│  │  │ Redis         │                                         │   │
+│  │  │ (sessions)    │    ┌──────────────────────────────────┐ │   │
+│  │  └───────────────┘    │ STS Token Exchange Server       │ │   │
+│  │                       │ (port 7777)                      │ │   │
+│  │                       │  • OBO token exchange            │ │   │
+│  │                       │  • Elicitations                  │ │   │
+│  │                       └──────────────────────────────────┘ │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
+│  │ keycloak ns  │  │ httpbin ns   │  │ agent ns                 │ │
+│  │ (OIDC IdP)   │  │ (sample app) │  │ (AI Agents + K8s SA)     │ │
+│  └──────────────┘  └──────────────┘  └──────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Quick Reference: Which Security Option to Use
+
+| Scenario | Recommended Option | Policy Resource |
+|---|---|---|
+| Browser-based web apps calling APIs | **CORS** + **CSRF** | EnterpriseAgentgatewayPolicy |
+| Simple service-to-service auth | **API Key** | AuthConfig + EnterpriseAgentgatewayPolicy |
+| Human users logging in (interactive) | **OAuth Authorization Code** | AuthConfig + EnterpriseAgentgatewayPolicy |
+| Programmatic API access with IdP | **OAuth Access Token** or **JWT** | AuthConfig or EnterpriseAgentgatewayPolicy |
+| High-performance token validation | **JWT (Native)** | EnterpriseAgentgatewayPolicy |
+| Agent acting on behalf of user | **OBO Token Exchange** | Helm values (STS) + JWT Policy |
+| Agent needs upstream API credentials | **Elicitations** | Helm values (STS) + Solo UI |
+| Custom auth logic / legacy systems | **BYO Ext Auth** | EnterpriseAgentgatewayPolicy |
+| Internal testing / simple scenarios | **Basic Auth** | AuthConfig + EnterpriseAgentgatewayPolicy |
