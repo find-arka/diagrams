@@ -192,7 +192,7 @@ sequenceDiagram
 
     Note over C,Backend: Optional Mode
 
-    rect rgb(245, 245, 255)
+    opt
         Note over AGW: mode: Optional<br/>• Valid credentials → forward<br/>• Invalid credentials → 401 reject<br/>• No credentials → allow through
     end
 ```
@@ -237,7 +237,7 @@ sequenceDiagram
 
     Note over C,Backend: Optional Mode
 
-    rect rgb(245, 245, 255)
+    opt
         Note over AGW: mode: Optional<br/>• Valid API key → forward<br/>• Invalid API key → 401 reject<br/>• No API key → allow through
     end
 ```
@@ -405,7 +405,7 @@ sequenceDiagram
 
     Note over C,Backend: Optional & Permissive Modes
 
-    rect rgb(245, 245, 255)
+    opt
         Note over AGW: mode: Optional<br/>• Valid JWT → forward<br/>• Invalid JWT → 401 reject<br/>• No JWT → allow through
 
         Note over AGW: mode: Permissive<br/>• Valid JWT → forward<br/>• Invalid JWT → allow through<br/>• No JWT → allow through
@@ -432,8 +432,6 @@ graph LR
 
     Note["Token's iss claim determines<br/>which provider validates it"]
 
-    style AGW fill:#e8f4fd,stroke:#1a73e8
-    style Providers fill:#f0f9e8,stroke:#34a853
 ```
 
 ---
