@@ -488,7 +488,7 @@ sequenceDiagram
 │              │       │                                     │
 │              │       │  ┌───────────────────────────────┐  │
 │              │──────►│  │  Gateway Proxy                │  │
-│              │       │  │  JWT Policy validates          │  │
+│              │       │  │  JWT Policy validates         │  │
 │              │       │  │  delegated tokens from STS    │  │
 │              │       │  └───────────────────────────────┘  │
 └──────────────┘       └─────────────────────────────────────┘
